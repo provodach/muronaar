@@ -1,0 +1,25 @@
+# Python/test caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# Local credentials and agent settings
+.env
+.env.*
+!.env.example
+.aws/
+.codex/
+.agents/
+
+# Runtime and generated installation/test output
+*.log
+/.install-stage/
+/build/
+/dist/stage/
+/dist/nginx/generated/
+/test/results/
+/test/artifacts/
+
+# Private runtime configuration
+/script/config.liq

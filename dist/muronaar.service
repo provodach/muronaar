@@ -1,0 +1,20 @@
+[Unit]
+Description=Muronaar continuous HLS video broadcast
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=@USER@
+Group=@GROUP@
+WorkingDirectory=@INSTALL_DIR@
+ExecStart="@LIQUIDSOAP@" @INSTALL_DIR@/muronaar.liq
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+UMask=0022
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
