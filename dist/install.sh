@@ -75,9 +75,10 @@ render() {
 }
 # Read the config before replacing it; updates also work when it is already installed.
 sed -E "s|^[[:space:]]*output_hls_dir[[:space:]]*=.*$|output_hls_dir = \"$hls_dir\"|" "$config" > "$work/config.liq"
-install -d -o "$user" -g "$group" -m 0755 "$dir" "$hls_dir"
+install -d -o "$user" -g "$group" -m 0755 "$dir" "$hls_dir" "$dir/assets"
 install -o "$user" -g "$group" -m 0644 "$dist/../script/muronaar.liq" "$dir/muronaar.liq"
 install -o "$user" -g "$group" -m 0640 "$work/config.liq" "$dir/config.liq"
+install -o "$user" -g "$group" -m 0644 "$dist/../assets/stream-logo.png" "$dir/assets/stream-logo.png"
 install -d -o "$user" -g "$group" -m 0700 "$dir/nginx"
 for template in "$dist"/nginx/*.conf; do
     render "$template" > "$work/$(basename -- "$template")"

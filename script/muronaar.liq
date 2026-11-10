@@ -132,15 +132,71 @@ def cleanup_hls_file(filename) =
 end
 list.iter(cleanup_hls_file, file.ls(output_hls_dir))
 
+# The 2.4.6 canvas decoder fits coded dimensions but ignores non-square pixels.
+# Probe during request preparation, never in the synchronous playback callback.
+def background_geometry(~metadata:_, filename) =
+  try
+    result = process.run("timeout 5s ffprobe -v error -select_streams v:0 -show_entries stream=width,height,sample_aspect_ratio -of csv=p=0 #{process.quote(filename)}")
+    if result.status != "exit" or result.status.code != 0 then
+      error.raise(error.failure, "ffprobe failed")
+    end
+    fields = string.split(separator=",", string.trim(result.stdout))
+    w = int_of_string(list.nth(fields, 0))
+    h = int_of_string(list.nth(fields, 1))
+    sar_fields = string.split(separator=":", list.nth(default="1:1", fields, 2))
+    sar_num = float_of_string(default=1.0, list.nth(default="1", sar_fields, 0))
+    sar_den = float_of_string(default=1.0, list.nth(default="1", sar_fields, 1))
+    sar = if sar_num > 0.0 and sar_den > 0.0 then sar_num / sar_den else 1.0 end
+    if w <= 0 or h <= 0 then error.raise(error.failure, "invalid video dimensions") end
+    # Match the decoder's integer fit, then correct its centered image for SAR.
+    aw = if program_height * w < program_width * h then w * program_height / h else program_width end
+    ah = if program_height * w < program_width * h then program_height else h * program_width / w end
+    dar = float(w) * sar / float(h)
+    dw = min(float(program_width), float(program_height) * dar)
+    dh = min(float(program_height), float(program_width) / dar)
+    sx = dw / float(aw)
+    sy = dh / float(ah)
+    [
+      ("muronaar_xscale", string(sx)), ("muronaar_yscale", string(sy)),
+      ("muronaar_x", string(int((float(program_width) - float(program_width) * sx) / 2.0))),
+      ("muronaar_y", string(int((float(program_height) - float(program_height) * sy) / 2.0)))
+    ]
+  catch _ do
+    log("Cannot probe background video geometry: #{filename}; using decoder proportions")
+    []
+  end
+end
+decoder.metadata.add("muronaar_geometry", background_geometry)
+
 # Select ONLY video at the source boundary: files are decoded without audio.
-# Sequential, looping directory playlist; pick up directory changes every minute.
+# Shuffle each complete round without repeats; rescan the directory each round.
 files = playlist(
-  id="background_files", mode="normal", loop=true,
-  reload=60, reload_mode="seconds", prefetch=1,
+  id="background_files", mode="randomize", loop=true,
+  reload=1, reload_mode="rounds", prefetch=1,
   stream_dir
 )
-files = source({video=source.tracks(files).video})
-files = video.resize(width=program_width, height=program_height, proportional=true, files)
+files_video = source.tracks(files).video
+files = source({video=files_video, metadata=track.metadata(files_video), track_marks=track.track_marks(files_video)})
+background_transform = ref({sx=1.0, sy=1.0, x=0, y=0})
+files.on_track(synchronous=true, fun (m) -> begin
+  background_transform := {
+    sx=float_of_string(default=1.0, m["muronaar_xscale"]),
+    sy=float_of_string(default=1.0, m["muronaar_yscale"]),
+    x=int_of_string(default=0, m["muronaar_x"]),
+    y=int_of_string(default=0, m["muronaar_y"])
+  }
+end)
+# Flatten decoder image fragments into the full-size canvas before scaling.
+# This avoids passing their narrow/unaligned strides to libswscale.
+files = video.viewport(width=program_width, height=program_height, files)
+files = video.render(transparent=false, files)
+# video.resize reuses its scaler; video.scale constructs one on every frame.
+files = video.resize(proportional=false,
+  width={max(1, int(float(program_width) * background_transform().sx + 0.5))},
+  height={max(1, int(float(program_height) * background_transform().sy + 0.5))},
+  x={background_transform().x}, y={background_transform().y}, files)
+files = video.viewport(width=program_width, height=program_height, files)
+files = video.render(transparent=false, files)
 files = mksafe(files)
 
 # FFmpeg autodetects AAC/ADTS as well as MP3. Both retry independently;
@@ -175,9 +231,36 @@ clock.assign_new(id="rtmp_clock", [live])
 live = buffer(id="rtmp_bridge", buffer=1.0, max=stream_buffer, live)
 live = video.resize(width=program_width, height=program_height, proportional=true, live)
 
+# Overlay once on the common program, so background and RTMP share the logo.
+# Installed layout: <install-dir>/assets; repository layout: ../assets.
+def add_stream_logo(s) =
+  script_dir = path.dirname(liquidsoap.script.path)
+  installed_logo = "#{script_dir}/assets/stream-logo.png"
+  repo_logo = "#{script_dir}/../assets/stream-logo.png"
+  logo_path = if file.exists(installed_logo) then installed_logo elsif file.exists(repo_logo) then repo_logo else
+    error.raise(error.invalid, "Missing assets/stream-logo.png; reinstall Muronaar assets")
+  end
+  logo_size = max(1, int(96.0 * float(program_height) / 1080.0 + 0.5))
+  logo_margin = max(1, int(10.0 * float(program_height) / 1080.0 + 0.5))
+  # Resolve before the output clock starts; the PNG needs no file metadata probes.
+  logo_request = request.create(persistent=true, resolve_metadata=false, logo_path)
+  if not request.resolve(logo_request) then
+    error.raise(error.invalid, "Cannot resolve stream logo")
+  end
+  logo = request.image(id="stream_logo", width=logo_size, height=logo_size, logo_request)
+  logo = video.opacity(0.8, logo)
+  logo = video.scale(x=program_width-logo_size-logo_margin, y=logo_margin, logo)
+  program_tracks = source.tracks(s)
+  program_video = track.video.add([program_tracks.video, source.tracks(logo).video])
+  source(id="branded_program", program_tracks.{video=program_video})
+end
+
 # Switch decoded frames once for all variants. Each encoder keeps its state
 # across source changes; all active outputs share timestamps and GOP cadence.
 program = fallback(id="program", track_sensitive=false, [live, background])
+program = add_stream_logo(program)
+# Composite once, rather than re-rendering the same layers in each encoder.
+program = video.render(transparent=false, program)
 clock.assign_new(id="program_clock", sync="cpu", [program])
 program.on_track(synchronous=false, fun (_) -> log("Program source/track changed"))
 

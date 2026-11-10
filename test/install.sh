@@ -6,7 +6,8 @@ work=$(mktemp -d /tmp/muronaar-install-test.XXXXXXXX)
 trap 'rm -rf -- "$work"' EXIT
 user=$(id -un)
 group=$(id -gn)
-mkdir -p "$work/source/script" "$work/bin"
+mkdir -p "$work/source/script" "$work/source/assets" "$work/bin"
+cp "$repo/assets/stream-logo.png" "$work/source/assets/"
 cp -R "$repo/dist" "$work/source/"
 cp "$repo/script/muronaar.liq" "$repo/script/config.example.liq" "$work/source/script/"
 export MURONAAR_TEST_ROOT=$work
@@ -36,6 +37,8 @@ run_install() {
         --hls-dir "$1" --liquidsoap /usr/bin/true --key "$key" > "$work/output.log"
 }
 run_install "$work/hls"
+cmp "$repo/assets/stream-logo.png" "$work/app/assets/stream-logo.png"
+[[ $(stat -c '%U:%G' "$work/app/assets/stream-logo.png") == "$user:$group" ]]
 [[ -d $work/hls && $(stat -c '%U:%G' "$work/app") == "$user:$group" ]]
 [[ $(stat -c '%U:%G' "$work/hls") == "$user:$group" ]]
 grep -Fq "output_hls_dir = \"$work/hls\"" "$work/app/config.liq"

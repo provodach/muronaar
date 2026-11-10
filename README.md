@@ -16,7 +16,8 @@ background without restarting the HLS outputs.
 
 One decoded program feeds either one H.264 encoder (1080p by default) or four
 encoders: 1080p, 720p, 480p and 240p at 30 fps,
-with AAC 128 kbit/s stereo audio. Video is fitted proportionally with letterboxing.
+with AAC 128 kbit/s stereo audio. Video is fitted proportionally with letterboxing. Background files with
+non-square pixels are fitted using their display aspect ratio (SAR included).
 NVENC is preferred; if unavailable, `auto` falls back to CPU encoding with libx264.
 A startup probe checks the selected encoding sessions using the same
 Liquidsoap executable and FFmpeg libraries as the service.
@@ -30,6 +31,9 @@ OBS ─ nginx RTMP/auth ─┘
 ## Repository layout
 
 ```text
+assets/
+  logo.png               README logo
+  stream-logo.png        Broadcast overlay
 script/
   muronaar.liq           Broadcast, encoder detection and HLS files
   config.example.liq     Public example configuration
@@ -46,18 +50,24 @@ test/
 ## Requirements
 
 Use Linux with systemd, Bash, sed, coreutils (`timeout`), Liquidsoap 2.4.6
-with FFmpeg support, nginx and the nginx RTMP module. FFmpeg CLI is useful for
-diagnostics and benchmarks; Liquidsoap encodes with its own linked FFmpeg libraries.
+with FFmpeg support, nginx and the nginx RTMP module. FFmpeg CLI (including
+`ffprobe`) is required to probe background video geometry; Liquidsoap encodes
+with its own linked FFmpeg libraries.
 For H.264, that build must provide `h264_nvenc` or `libx264`; AAC encoding is also required.
 
 On Ubuntu, install the available nginx packages with:
 
 ```bash
-sudo apt-get install nginx libnginx-mod-rtmp
+sudo apt-get install ffmpeg nginx libnginx-mod-rtmp
 ```
 
 Install a Liquidsoap 2.4.6 build with the required codecs separately. An encoder
 listed by the standalone `ffmpeg` command does not guarantee it exists in Liquidsoap.
+A 96×96 logo at `assets/stream-logo.png` overlays both background and live video
+at 80% opacity, 10 pixels from the top/right edges at 1080p. Its size and margin
+scale with the program resolution. The installer copies it to
+`--dir/assets/stream-logo.png`; `assets/logo.png` is the README logo.
+
 NVIDIA encoding also requires a compatible GPU and working driver. Ensure the
 service identity has access to the executable, its libraries and GPU devices.
 
@@ -139,7 +149,7 @@ integers for `stream_port` and `stream_hls_port` so the installer can read them.
 
 | Setting | Shipped default | Meaning |
 | --- | --- | --- |
-| `stream_dir` | `/var/lib/muronaar/videos` | Background video library; sequential looping playlist, refreshed every 60 seconds |
+| `stream_dir` | `/var/lib/muronaar/videos` | Background video library; shuffled without repeats within each round, rescanned after every round |
 | `stream_bgsound` | `https://station.waveradio.org/provodach` | Background radio URL; AAC first, URL + `.mp3` as a fallback |
 | `stream_port` | `8900` | Internal Liquidsoap RTMP listener |
 | `stream_hls_port` | `8088` | Optional built-in HTTP origin port; disabled by default |
