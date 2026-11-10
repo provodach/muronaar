@@ -6,6 +6,10 @@ stream_port = 8900
 stream_hls_port = 8088
 output_hls_dir = "/tmp/muronaar"
 
+# true: 1080p + 720p + 480p; false: one stream at stream_main_size.
+stream_multi = false
+stream_main_size = 1080
+
 # RTMP jitter buffer / dead publisher timeout (seconds).
 stream_buffer = 3.0
 stream_timeout = 5.0

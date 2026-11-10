@@ -14,10 +14,11 @@ Internet radio soundtrack. When an OBS publisher connects through nginx RTMP,
 its video **and audio** replace the background. Disconnecting returns to the
 background without restarting the HLS outputs.
 
-One decoded program feeds three H.264 encoders: 1080p, 720p and 480p at 30 fps,
+One decoded program feeds either one H.264 encoder (1080p by default) or three
+encoders: 1080p, 720p and 480p at 30 fps,
 with AAC 128 kbit/s stereo audio. Video is fitted proportionally with letterboxing.
 NVENC is preferred; if unavailable, `auto` falls back to CPU encoding with libx264.
-A startup probe checks three concurrent encoding sessions using the same
+A startup probe checks the selected encoding sessions using the same
 Liquidsoap executable and FFmpeg libraries as the service.
 
 ```text
@@ -144,6 +145,8 @@ integers for `stream_port` and `stream_hls_port` so the installer can read them.
 | `stream_port` | `8900` | Internal Liquidsoap RTMP listener |
 | `stream_hls_port` | `8088` | Plain HTTP HLS origin |
 | `output_hls_dir` | `/tmp/muronaar` | Working HLS files, also used in file-only mode |
+| `stream_multi` | `false` | `true`: encode all three resolutions; `false`: encode only `stream_main_size` |
+| `stream_main_size` | `1080` | Single-output resolution: `1080`, `720` or `480`; ignored in multi-output mode |
 | `stream_buffer` | `3.0` | Maximum buffering for network-source bridges, seconds |
 | `stream_timeout` | `5.0` | Stalled RTMP publisher read timeout, seconds |
 | `hls_segment_duration` | `2.0` | Target segment duration and GOP duration |
@@ -235,20 +238,22 @@ In OBS, select **Custom** under Settings → Stream:
 
 | Public path | Output |
 | --- | --- |
-| `/vod/stream.m3u8` | 1920×1080, fixed quality |
-| `/vod/stream-720.m3u8` | 1280×720, fixed quality |
-| `/vod/stream-480.m3u8` | 854×480, fixed quality |
-| `/vod/master.m3u8` | Adaptive selection |
+| `/vod/stream.m3u8` | Selected resolution in single-output mode; 1920×1080 in multi-output mode |
+| `/vod/stream-720.m3u8` | 1280×720, multi-output mode only |
+| `/vod/stream-480.m3u8` | 854×480, multi-output mode only |
+| `/vod/master.m3u8` | Lists the active output(s) |
 
 The master lists resolutions, bandwidth estimates and media-playlist URLs.
 An adaptive HLS player downloads one quality at a time and can switch at aligned
-segment boundaries. All three variants are encoded continuously regardless of
+segment boundaries. With `stream_multi = true`, all three variants are encoded continuously regardless of
 viewer count. Use a compatible HLS player; browsers without native HLS need a
 player such as hls.js. A direct media-playlist URL fixes the quality.
 
-NVENC requires three concurrent sessions. CPU fallback is functional, but three
+Multi-output NVENC requires three concurrent sessions. CPU fallback is functional, but three
 outputs can exceed a small CPU's real-time budget. Thread count does not cap CPU
-usage. Monitor `Latency is too high` in the journal; reduce preset complexity if needed.
+usage. Monitor `Latency is too high` in the journal; use single-output mode or
+reduce preset complexity if needed. In single-output mode, processing uses the
+selected resolution throughout, avoiding an unnecessary intermediate 1080p frame.
 
 ## Development checks
 

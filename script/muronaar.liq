@@ -1,24 +1,33 @@
 #!/usr/bin/env liquidsoap
 %include "config.liq"
 
+if not list.mem(stream_main_size, [1080, 720, 480]) then
+  error.raise(error.invalid, "stream_main_size must be 1080, 720 or 480")
+end
+program_height = if stream_multi then 1080 else stream_main_size end
+program_width = if program_height == 1080 then 1920 elsif program_height == 720 then 1280 else 854 end
+
 # Batch three video frames per engine tick to reduce 1080p processing overhead.
 settings.frame.duration := 0.1
-settings.frame.video.width := 1920
-settings.frame.video.height := 1080
+settings.frame.video.width := program_width
+settings.frame.video.height := program_height
 settings.frame.video.framerate := 30
 settings.frame.audio.samplerate := 48000
 settings.frame.audio.channels := 2
 
-# One decoded program feeds three encoders on the same clock. Maxrate plus
+# One decoded program feeds the selected encoders on the same clock. Maxrate plus
 # audio/mux overhead determines the conservative master BANDWIDTH values.
-hls_variants = [
+all_hls_variants = [
   {name="1080", width=1920, height=1080, playlist="stream.m3u8",
    bitrate=video_bitrate, maxrate="5000k", bufsize="9000k", bandwidth=5500000},
-  {name="720", width=1280, height=720, playlist="stream-720.m3u8",
+  {name="720", width=1280, height=720, playlist=if stream_multi then "stream-720.m3u8" else "stream.m3u8" end,
    bitrate=video_bitrate_720, maxrate="3000k", bufsize="5000k", bandwidth=3400000},
-  {name="480", width=854, height=480, playlist="stream-480.m3u8",
+  {name="480", width=854, height=480, playlist=if stream_multi then "stream-480.m3u8" else "stream.m3u8" end,
    bitrate=video_bitrate_480, maxrate="1500k", bufsize="2400k", bandwidth=1800000}
 ]
+hls_variants = if stream_multi then all_hls_variants else
+  list.filter(fun (v) -> v.height == stream_main_size, all_hls_variants)
+end
 # Segment boundaries must match across resolutions for adaptive switching.
 hls_gop = int(hls_segment_duration * 30.0)
 if hls_gop < 1 then error.raise(error.invalid, "hls_segment_duration must be at least one video frame") end
@@ -44,8 +53,8 @@ output.file(
   probe_code = "
 settings.log.level := 1
 settings.frame.duration := 0.1
-settings.frame.video.width := 1920
-settings.frame.video.height := 1080
+settings.frame.video.width := #{program_width}
+settings.frame.video.height := #{program_height}
 settings.frame.video.framerate := 30
 probe = source({video=source.tracks(blank()).video})
 frames = ref(0)
@@ -102,7 +111,8 @@ selected_video_threads =
 if selected_video_codec == "libx264" and not probe_video_encoder("libx264", software_preset) then
   error.raise(error.invalid, "Software H.264 (libx264) encode probe failed; no usable video encoder")
 end
-log("Video encoder selected: #{selected_video_codec}, preset=#{selected_video_preset}, threads=#{selected_video_threads}, 1080p/720p/480p@30")
+output_sizes = string.concat(separator="/", list.map(fun (v) -> "#{v.name}p", hls_variants))
+log("Video encoder selected: #{selected_video_codec}, preset=#{selected_video_preset}, threads=#{selected_video_threads}, outputs=#{output_sizes}@30")
 
 file.mkdir(parents=true, output_hls_dir)
 
@@ -128,7 +138,7 @@ files = playlist(
   stream_dir
 )
 files = source({video=source.tracks(files).video})
-files = video.resize(width=1920, height=1080, proportional=true, files)
+files = video.resize(width=program_width, height=program_height, proportional=true, files)
 files = mksafe(files)
 
 # FFmpeg autodetects AAC/ADTS as well as MP3. Both retry independently;
@@ -161,10 +171,10 @@ live = input.ffmpeg(
 )
 clock.assign_new(id="rtmp_clock", [live])
 live = buffer(id="rtmp_bridge", buffer=1.0, max=stream_buffer, live)
-live = video.resize(width=1920, height=1080, proportional=true, live)
+live = video.resize(width=program_width, height=program_height, proportional=true, live)
 
 # Switch decoded frames once for all variants. Each encoder keeps its state
-# across source changes; the three outputs share timestamps and GOP cadence.
+# across source changes; all active outputs share timestamps and GOP cadence.
 program = fallback(id="program", track_sensitive=false, [live, background])
 clock.assign_new(id="program_clock", sync="cpu", [program])
 program.on_track(synchronous=false, fun (_) -> log("Program source/track changed"))
