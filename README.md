@@ -14,8 +14,8 @@ Internet radio soundtrack. When an OBS publisher connects through nginx RTMP,
 its video **and audio** replace the background. Disconnecting returns to the
 background without restarting the HLS outputs.
 
-One decoded program feeds either one H.264 encoder (1080p by default) or three
-encoders: 1080p, 720p and 480p at 30 fps,
+One decoded program feeds either one H.264 encoder (1080p by default) or four
+encoders: 1080p, 720p, 480p and 240p at 30 fps,
 with AAC 128 kbit/s stereo audio. Video is fitted proportionally with letterboxing.
 NVENC is preferred; if unavailable, `auto` falls back to CPU encoding with libx264.
 A startup probe checks the selected encoding sessions using the same
@@ -23,7 +23,7 @@ Liquidsoap executable and FFmpeg libraries as the service.
 
 ```text
 video library + radio ─┐
-                       ├─ Liquidsoap ─ HTTP HLS ─ nginx cache ─ viewers
+                       ├─ Liquidsoap ─ HLS files ─ nginx static ─ viewers
 OBS ─ nginx RTMP/auth ─┘
 ```
 
@@ -31,13 +31,13 @@ OBS ─ nginx RTMP/auth ─┘
 
 ```text
 script/
-  muronaar.liq           Broadcast, encoder detection and HTTP HLS origin
+  muronaar.liq           Broadcast, encoder detection and HLS files
   config.example.liq     Public example configuration
   config.liq             Your private settings (ignored by git)
 dist/
   install.sh             Installer for /opt/muronaar and systemd
   muronaar.service       systemd unit template
-  nginx/                 Key-free nginx templates for RTMP, auth and HLS cache
+  nginx/                 Key-free nginx templates for RTMP, auth and static HLS
 test/
   benchmark_presets.py   Optional CPU/quality benchmark
   install.sh             Installer smoke test (temporary files only)
@@ -117,8 +117,7 @@ Create/configure the library yourself and grant the service user read/traverse
 access. It does not install packages, make backups, enable nginx snippets or
 start/restart services. Back up existing files before updating.
 
-nginx's disk cache remains separate at `/var/cache/nginx/muronaar_hls`. HLS
-segments default to `/tmp/muronaar`, so on hosts with tmpfs-backed `/tmp` they
+HLS segments default to `/tmp/muronaar`, so on hosts with tmpfs-backed `/tmp` they
 stay in RAM. The installer does not mount tmpfs; check your host with
 `findmnt -T /tmp/muronaar` after creating the directory.
 
@@ -143,10 +142,10 @@ integers for `stream_port` and `stream_hls_port` so the installer can read them.
 | `stream_dir` | `/var/lib/muronaar/videos` | Background video library; sequential looping playlist, refreshed every 60 seconds |
 | `stream_bgsound` | `https://station.waveradio.org/provodach` | Background radio URL; AAC first, URL + `.mp3` as a fallback |
 | `stream_port` | `8900` | Internal Liquidsoap RTMP listener |
-| `stream_hls_port` | `8088` | Plain HTTP HLS origin |
+| `stream_hls_port` | `8088` | Optional built-in HTTP origin port; disabled by default |
 | `output_hls_dir` | `/tmp/muronaar` | Working HLS files, also used in file-only mode |
-| `stream_multi` | `false` | `true`: encode all three resolutions; `false`: encode only `stream_main_size` |
-| `stream_main_size` | `1080` | Single-output resolution: `1080`, `720` or `480`; ignored in multi-output mode |
+| `stream_multi` | `false` | `true`: encode all four resolutions; `false`: encode only `stream_main_size` |
+| `stream_main_size` | `1080` | Single-output resolution: `1080`, `720`, `480` or `240`; ignored in multi-output mode |
 | `stream_buffer` | `3.0` | Maximum buffering for network-source bridges, seconds |
 | `stream_timeout` | `5.0` | Stalled RTMP publisher read timeout, seconds |
 | `hls_segment_duration` | `2.0` | Target segment duration and GOP duration |
@@ -155,6 +154,7 @@ integers for `stream_port` and `stream_hls_port` so the installer can read them.
 | `video_bitrate` | `"4500k"` | 1080p target video bitrate |
 | `video_bitrate_720` | `"2500k"` | 720p target video bitrate |
 | `video_bitrate_480` | `"1200k"` | 480p target video bitrate |
+| `video_bitrate_240` | `"350k"` | 240p target video bitrate |
 | `video_encoder` | `"auto"` | `auto`: NVENC then libx264; `nvenc`: require GPU; `software`: CPU only |
 | `nvenc_preset` | `"p4"` | NVENC preset |
 | `software_preset` | `"veryfast"` | libx264 preset |
@@ -179,10 +179,7 @@ Liquidsoap port, rerun the installer and reload nginx after updating the service
 Templates in `dist/nginx/` contain placeholders, **no configured credentials**.
 Use the rendered files in `--dir/nginx/`, not the templates directly. The examples
 below assume the default `/opt/muronaar`; use your chosen directory otherwise.
-Create the dedicated nginx cache directory for your nginx worker user if needed
-(for example, `sudo install -d -o www-data -g www-data /var/cache/nginx/muronaar_hls`).
-
-Inside nginx.conf's existing `http {}` block, include the cache zone/auth server:
+Inside nginx.conf's existing `http {}` block, include the authorization server:
 
 ```nginx
 include /opt/muronaar/nginx/http.conf;
@@ -215,11 +212,14 @@ cache zones or listeners. Validate and reload:
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
-nginx strips `/vod/` before proxying to the HTTP origin. The four playlists are
-cached for one second; immutable init/segments for ten minutes; errors are not
-cached. `X-Cache-Status` shows `MISS`, `HIT` or `EXPIRED`. HTTP buffering stays on
-for the cache. RTMP is a separate live relay; HTTP buffering directives do not
-apply, and nginx does not transcode or record it.
+nginx serves `/vod/` directly from `output_hls_dir` using `alias`, without an
+HTTP upstream or proxy cache. Responses carry `Cache-Control: no-store`.
+Only published HLS filenames are allowed; temporary files and config files
+return 404. nginx workers need read access to segments and traverse access to
+the directory and its parents. The service uses a 0022 umask for readable files.
+When changing `output_hls_dir`, update nginx's `alias` too (the installer renders
+it from `--hls-dir`). Liquidsoap's optional HTTP output remains in the script,
+but is disabled by default.
 
 Publish TCP 1935 (or `--rtmp-port`) through your router/firewall to nginx. Keep
 Liquidsoap's ingest/HLS ports private: direct ingest bypasses nginx authorization.
@@ -241,15 +241,16 @@ In OBS, select **Custom** under Settings → Stream:
 | `/vod/stream.m3u8` | Selected resolution in single-output mode; 1920×1080 in multi-output mode |
 | `/vod/stream-720.m3u8` | 1280×720, multi-output mode only |
 | `/vod/stream-480.m3u8` | 854×480, multi-output mode only |
+| `/vod/stream-240.m3u8` | 426×240, multi-output mode only |
 | `/vod/master.m3u8` | Lists the active output(s) |
 
 The master lists resolutions, bandwidth estimates and media-playlist URLs.
 An adaptive HLS player downloads one quality at a time and can switch at aligned
-segment boundaries. With `stream_multi = true`, all three variants are encoded continuously regardless of
+segment boundaries. With `stream_multi = true`, all four variants are encoded continuously regardless of
 viewer count. Use a compatible HLS player; browsers without native HLS need a
 player such as hls.js. A direct media-playlist URL fixes the quality.
 
-Multi-output NVENC requires three concurrent sessions. CPU fallback is functional, but three
+Multi-output NVENC requires four concurrent sessions. CPU fallback is functional, but four
 outputs can exceed a small CPU's real-time budget. Thread count does not cap CPU
 usage. Monitor `Latency is too high` in the journal; use single-output mode or
 reduce preset complexity if needed. In single-output mode, processing uses the
@@ -270,5 +271,5 @@ excluded by `.gitignore`. The optional Python script `test/benchmark_presets.py`
 measures software encoder CPU cost and SSIM; Python is not used by the installer.
 
 References: [Liquidsoap 2.4.6](https://www.liquidsoap.info/doc-2.4.6/documentation),
-[nginx HTTP proxy/cache](https://nginx.org/en/docs/http/ngx_http_proxy_module.html),
+[nginx static file mapping](https://nginx.org/en/docs/http/ngx_http_core_module.html#alias),
 [nginx RTMP directives](https://github.com/arut/nginx-rtmp-module/wiki/Directives).

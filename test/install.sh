@@ -42,7 +42,7 @@ grep -Fq "output_hls_dir = \"$work/hls\"" "$work/app/config.liq"
 grep -Fq 'stream_dir = "/var/lib/muronaar/videos"' "$work/app/config.liq"
 grep -Fq "WorkingDirectory=$work/app" "$work/muronaar.service"
 grep -Fq "User=$user" "$work/muronaar.service"
-grep -Fq "include $work/app/nginx/hls-playlist.conf;" "$work/app/nginx/hls.conf"
+grep -Fq "alias $work/hls/;" "$work/app/nginx/hls.conf"
 grep -Fq "$key" "$work/app/nginx/http.conf"
 if grep -Fq "$key" "$work/app/nginx/rtmp.conf"; then exit 1; fi
 if grep -REq '@[A-Z_]+@' "$work/app/nginx" "$work/muronaar.service"; then exit 1; fi

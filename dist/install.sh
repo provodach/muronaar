@@ -70,7 +70,7 @@ trap 'rm -rf -- "$work"' EXIT
 render() {
     sed -e "s|@USER@|$user|g" -e "s|@GROUP@|$group|g" \
         -e "s|@INSTALL_DIR@|$dir|g" -e "s|@LIQUIDSOAP@|$liquidsoap|g" \
-        -e "s|@STREAM_KEY@|$key|g" -e 's|@RTMP_PORT@|1935|g' -e 's|@AUTH_PORT@|18935|g' \
+        -e "s|@HLS_DIR@|$hls_dir|g" -e "s|@STREAM_KEY@|$key|g" -e 's|@RTMP_PORT@|1935|g' -e 's|@AUTH_PORT@|18935|g' \
         -e "s|@INGEST_PORT@|$ingest_port|g" -e "s|@HLS_PORT@|$hls_port|g" "$1"
 }
 # Read the config before replacing it; updates also work when it is already installed.

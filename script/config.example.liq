@@ -2,11 +2,11 @@
 stream_dir = "/var/lib/muronaar/videos"
 stream_bgsound = "https://station.waveradio.org/provodach"
 stream_port = 8900
-# Plain HTTP origin for HLS (no TLS).
+# Optional built-in HTTP origin port (disabled in file-only mode).
 stream_hls_port = 8088
 output_hls_dir = "/tmp/muronaar"
 
-# true: 1080p + 720p + 480p; false: one stream at stream_main_size.
+# true: 1080p + 720p + 480p + 240p; false: one stream at stream_main_size.
 stream_multi = false
 stream_main_size = 1080
 
@@ -20,6 +20,7 @@ hls_segments_overhead = 2
 video_bitrate = "4500k"
 video_bitrate_720 = "2500k"
 video_bitrate_480 = "1200k"
+video_bitrate_240 = "350k"
 # auto: try NVENC, then libx264; nvenc: require GPU; software: force CPU.
 video_encoder = "auto"
 nvenc_preset = "p4"

@@ -1,11 +1,11 @@
 #!/usr/bin/env liquidsoap
 %include "config.liq"
 
-if not list.mem(stream_main_size, [1080, 720, 480]) then
-  error.raise(error.invalid, "stream_main_size must be 1080, 720 or 480")
+if not list.mem(stream_main_size, [1080, 720, 480, 240]) then
+  error.raise(error.invalid, "stream_main_size must be 1080, 720, 480 or 240")
 end
 program_height = if stream_multi then 1080 else stream_main_size end
-program_width = if program_height == 1080 then 1920 elsif program_height == 720 then 1280 else 854 end
+program_width = if program_height == 1080 then 1920 elsif program_height == 720 then 1280 elsif program_height == 480 then 854 else 426 end
 
 # Batch three video frames per engine tick to reduce 1080p processing overhead.
 settings.frame.duration := 0.1
@@ -23,7 +23,9 @@ all_hls_variants = [
   {name="720", width=1280, height=720, playlist=if stream_multi then "stream-720.m3u8" else "stream.m3u8" end,
    bitrate=video_bitrate_720, maxrate="3000k", bufsize="5000k", bandwidth=3400000},
   {name="480", width=854, height=480, playlist=if stream_multi then "stream-480.m3u8" else "stream.m3u8" end,
-   bitrate=video_bitrate_480, maxrate="1500k", bufsize="2400k", bandwidth=1800000}
+   bitrate=video_bitrate_480, maxrate="1500k", bufsize="2400k", bandwidth=1800000},
+  {name="240", width=426, height=240, playlist=if stream_multi then "stream-240.m3u8" else "stream.m3u8" end,
+   bitrate=video_bitrate_240, maxrate="400k", bufsize="700k", bandwidth=600000}
 ]
 hls_variants = if stream_multi then all_hls_variants else
   list.filter(fun (v) -> v.height == stream_main_size, all_hls_variants)
@@ -120,7 +122,7 @@ file.mkdir(parents=true, output_hls_dir)
 # before the muxer starts; never recurse or remove unrelated files/directories.
 def cleanup_hls_file(filename) =
   owned =
-    r/^(segment-[0-9]+(-(1080|720|480))?-[0-9]+\.m4s|init-[0-9]+(-(1080|720|480))?\.mp4|video_[0-9]+\.(m4s|mp4|ts)|stream(-720|-480)?\.m3u8|master\.m3u8|video\.m3u8|hls-state\.json)(\.tmp)?$/.test(filename) or
+    r/^(segment-[0-9]+(-(1080|720|480|240))?-[0-9]+\.m4s|init-[0-9]+(-(1080|720|480|240))?\.mp4|video_[0-9]+\.(m4s|mp4|ts)|stream(-720|-480|-240)?\.m3u8|master\.m3u8|video\.m3u8|hls-state\.json)(\.tmp)?$/.test(filename) or
     r/^liq[0-9a-f]+tmp$/.test(filename)
   artifact_path = "#{output_hls_dir}/#{filename}"
   if owned and not file.is_directory(artifact_path) then
@@ -266,7 +268,7 @@ def serve_hls(http_request, response) =
   response.header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
   cache_policy = ref("no-store")
   filename = http_request.query["filename"]
-  allowed = r/^(master\.m3u8|stream(-720|-480)?\.m3u8|segment-[0-9]+(-(1080|720|480))?-[0-9]+\.m4s|init-[0-9]+(-(1080|720|480))?\.mp4)$/.test(filename)
+  allowed = r/^(master\.m3u8|stream(-720|-480|-240)?\.m3u8|segment-[0-9]+(-(1080|720|480|240))?-[0-9]+\.m4s|init-[0-9]+(-(1080|720|480|240))?\.mp4)$/.test(filename)
   artifact_path = "#{output_hls_dir}/#{filename}"
   if not allowed then
     response.status_code(404)
@@ -312,9 +314,9 @@ def output_hls_http(s) =
   start_hls_muxer(s)
 end
 
-# Alternative: files only, without an HTTP listener. To restore this mode,
-# comment out output_hls_http(program) below and uncomment the next line.
-# start_hls_muxer(program)
+# Active: write HLS files; nginx serves output_hls_dir directly.
+start_hls_muxer(program)
 
-# Active: http://HOST:stream_hls_port/stream.m3u8 (no TLS).
-output_hls_http(program)
+# Optional built-in HTTP origin (disabled). To use it, comment out the call
+# above and uncomment the next line; stream_hls_port sets its listener port.
+# output_hls_http(program)
